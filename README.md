@@ -55,8 +55,6 @@ Este proyecto es una completa suite de herramientas, disponible como aplicación
     HUGGING_FACE_TOKEN = "tu_token_real_de_hugging_face"
     ```
 
-    > 🔒 **Nota de Seguridad**: El archivo `config.py` está incluido en el `.gitignore`, por lo que nunca se subirá a tu repositorio de GitHub. Esto mantiene tus credenciales seguras.
-
 ## Uso
 
 ### 🚀 Interfaz Web (Gradio)
