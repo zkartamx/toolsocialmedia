@@ -139,8 +139,3 @@ El proyecto generará las siguientes carpetas para mantener los archivos organiz
 ## Contribuciones
 
 Las contribuciones son bienvenidas. Por favor, abre un *issue* o un *pull request* para discutir cualquier cambio que te gustaría hacer.
-```
-
----
-
-¡Disfruta de tu herramienta de extracción y transcripción de audio!
