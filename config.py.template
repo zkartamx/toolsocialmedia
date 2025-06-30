@@ -1,0 +1,15 @@
+# config.py
+
+# Tu token de acceso de Hugging Face
+# Necesario para descargar los modelos de diarización de pyannote.audio.
+# 1. Crea una cuenta en https://huggingface.co/join
+# 2. Genera un token en https://huggingface.co/settings/tokens
+# 3. Acepta los términos de uso de los modelos:
+#    - https://huggingface.co/pyannote/speaker-diarization-3.1
+#    - https://huggingface.co/pyannote/segmentation-3.0
+HUGGING_FACE_TOKEN = "hf_TU_TOKEN_AQUI"
+
+
+# NOTA DE SEGURIDAD: Para proyectos en producción o compartidos,
+# es más seguro usar variables de entorno o un sistema de gestión de secretos.
+# Para este proyecto local, un archivo config.py es conveniente.

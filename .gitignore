@@ -1,0 +1,39 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Archivos de configuración locales
+config.py
+
+# Archivos compilados de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de dependencias y builds
+*.egg-info/
+build/
+dist/
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos multimedia generados
+/videos/*
+/audios/*
+/transcripciones/*
+/audio_sintetizado/*
+
+# Archivos de demo y temporales
+Demo.mov
+Demo.gif
+*.mp4
+*.mp3
+*.wav
+*.m4a
+
+# Excluir el propio .gitignore si se quiere
+# .gitignore
