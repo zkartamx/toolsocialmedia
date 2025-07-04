@@ -14,7 +14,9 @@ if ELEVEN_LABS_API_KEY == "TU_API_KEY_DE_ELEVEN_LABS_AQUI" or not ELEVEN_LABS_AP
 client = ElevenLabs(api_key=ELEVEN_LABS_API_KEY)
 
 text_to_generate = "Hola, esto es una prueba de Eleven Labs desde Python."
-output_path = "test_elevenlabs.mp3"
+output_folder = "test_outputs"
+os.makedirs(output_folder, exist_ok=True)
+output_path = os.path.join(output_folder, "test_elevenlabs.mp3")
 
 try:
     print(f"Intentando generar audio: \"{text_to_generate}\"...")

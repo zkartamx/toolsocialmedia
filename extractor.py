@@ -6,6 +6,7 @@ import torch
 from pyannote.audio import Pipeline
 import pandas as pd
 from gtts import gTTS
+from deep_translator import GoogleTranslator
 from datetime import datetime
 
 # Importar la configuración local
@@ -19,12 +20,13 @@ CARPETA_VIDEOS = 'videos'
 CARPETA_AUDIOS = 'audios'
 CARPETA_TRANSCRIPCIONES = 'transcripciones'
 CARPETA_AUDIO_SINTETIZADO = 'audio_sintetizado'
+CARPETA_TEST_OUTPUTS = 'test_outputs'
 
 # --- FUNCIONES DE UTILIDAD ---
 
 def crear_carpetas_necesarias():
     """Asegura que todas las carpetas necesarias para el proyecto existan."""
-    for carpeta in [CARPETA_VIDEOS, CARPETA_AUDIOS, CARPETA_TRANSCRIPCIONES, CARPETA_AUDIO_SINTETIZADO]:
+    for carpeta in [CARPETA_VIDEOS, CARPETA_AUDIOS, CARPETA_TRANSCRIPCIONES, CARPETA_AUDIO_SINTETIZADO, CARPETA_TEST_OUTPUTS]:
         os.makedirs(carpeta, exist_ok=True)
 
 # --- FUNCIONES DE EXTRACCIÓN ---
@@ -51,104 +53,100 @@ def extraer_audio(ruta_video):
 def descargar_video_youtube(url, start_time=None, end_time=None):
     """
     Descarga un video de YouTube, opcionalmente cortando un segmento específico.
-    Requiere que ffmpeg esté instalado y en el PATH si se usan tiempos de corte.
+    Optimizado para velocidad forzando el formato MP4 y con validación de tiempo mejorada.
+    Devuelve una tupla (ruta_del_archivo, mensaje_de_error).
     """
     print(f"INFO: Iniciando descarga de video desde: {url}")
     os.makedirs(CARPETA_VIDEOS, exist_ok=True)
-    
-    archivos_antes = set(os.listdir(CARPETA_VIDEOS))
-    
-    if start_time and end_time:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        nombre_archivo_plantilla = f"Fragmento1_{timestamp}.%(ext)s"
-        plantilla_salida = os.path.join(CARPETA_VIDEOS, nombre_archivo_plantilla)
-    else:
-        plantilla_salida = os.path.join(CARPETA_VIDEOS, '%(title)s.%(ext)s')
 
-    comando = ['yt-dlp', '-f', 'best', '-o', plantilla_salida]
+    # --- Validar y procesar tiempos de forma robusta ---
+    cortar_video = bool(start_time and end_time)
+    
+    if (start_time and not end_time) or (not start_time and end_time):
+        error_msg = "Debes especificar tanto el tiempo de inicio como el de fin para cortar el video."
+        print(f"ERROR: {error_msg}")
+        return None, error_msg
 
-    if start_time and end_time:
-        # Formato para yt-dlp: *START-END
-        # Usar ffmpeg para el corte es más preciso que --download-sections
-        comando.extend(['--downloader', 'ffmpeg'])
-        downloader_args = f"ffmpeg_i:-ss {start_time} -to {end_time}"
-        comando.extend(['--downloader-args', downloader_args])
+    if cortar_video:
+        try:
+            datetime.strptime(start_time, '%H:%M:%S')
+            datetime.strptime(end_time, '%H:%M:%S')
+        except ValueError:
+            error_msg = "Formato de tiempo inválido. Usa HH:MM:SS."
+            print(f"ERROR: {error_msg}")
+            return None, error_msg
+
+    # --- Determinar la ruta de salida de forma robusta ---
+    try:
+        get_name_cmd = ['yt-dlp', '--get-filename', '-o', '%(title)s.%(ext)s', url]
+        nombre_base_original = subprocess.run(get_name_cmd, check=True, capture_output=True, text=True, encoding='utf-8').stdout.strip()
+        
+        nombre_base, extension = os.path.splitext(nombre_base_original)
+        nombre_base_limpio = "".join([c for c in nombre_base if c.isalpha() or c.isdigit() or c in (' ', '_', '-')]).rstrip()
+
+        if cortar_video:
+            nombre_final = f"{nombre_base_limpio}_cut_{start_time.replace(':', '')}_{end_time.replace(':', '')}.mp4"
+        else:
+            nombre_final = f"{nombre_base_limpio}.mp4"
+            
+        ruta_salida_final = os.path.join(CARPETA_VIDEOS, nombre_final)
+
+    except subprocess.CalledProcessError as e:
+        error_msg = f"No se pudo obtener el nombre del archivo de yt-dlp: {e.stderr}"
+        print(f"ERROR: {error_msg}")
+        return None, error_msg
+
+    # --- Construir y ejecutar el comando de descarga optimizado ---
+    # Forzar formato a MP4 para optimizar el corte y evitar re-codificación.
+    comando = ['yt-dlp', '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', '-o', ruta_salida_final]
+
+    if cortar_video:
+        comando.extend([
+            '--download-sections', f'*{start_time}-{end_time}',
+            '--force-keyframes-at-cuts'
+        ])
 
     comando.append(url)
-    
+
+    # --- Ejecutar el comando ---
     try:
         print(f"INFO: Ejecutando comando: {' '.join(comando)}")
         resultado = subprocess.run(comando, check=True, capture_output=True, text=True, encoding='utf-8')
         print("SUCCESS: Proceso de descarga de yt-dlp finalizado.")
 
+        if os.path.exists(ruta_salida_final):
+            print(f"SUCCESS: Video guardado en '{ruta_salida_final}'")
+            return ruta_salida_final, None
+        else:
+            error_msg = "El archivo de video no fue encontrado después de la descarga."
+            print(f"ERROR: {error_msg}")
+            return None, error_msg
+
     except subprocess.CalledProcessError as e:
-        print(f"ERROR: yt-dlp falló con el código de salida {e.returncode}.")
-        print("--- Salida de yt-dlp (stdout) ---")
-        print(e.stdout)
-        print("--- Salida de yt-dlp (stderr) ---")
-        print(e.stderr)
-        print("---------------------------------")
-        return None
-    except FileNotFoundError:
-        print("ERROR: El comando 'yt-dlp' no fue encontrado. Asegúrate de que esté instalado y en tu PATH.")
-        return None
-
-    # Para depuración, siempre mostramos la salida de yt-dlp
-    print("--- Salida de yt-dlp (stdout) ---")
-    print(resultado.stdout)
-    print("--- Salida de yt-dlp (stderr) ---")
-    print(resultado.stderr)
-    print("---------------------------------")
-
-    # Estrategia 1: Detectar un archivo nuevo en la carpeta de destino.
-    archivos_despues = set(os.listdir(CARPETA_VIDEOS))
-    nuevos_archivos = archivos_despues - archivos_antes
-    if nuevos_archivos:
-        nombre_nuevo_archivo = nuevos_archivos.pop()
-        ruta_video = os.path.join(CARPETA_VIDEOS, nombre_nuevo_archivo)
-        print(f"INFO: Archivo nuevo detectado por estrategia 1: '{ruta_video}'")
-        return ruta_video
-
-    # Estrategia 2: Si no hay archivo nuevo, analizar la salida de yt-dlp.
-    print("INFO: No se detectó un archivo nuevo. Analizando salida de yt-dlp (estrategia 2)...")
-    for line in resultado.stdout.splitlines():
-        # Caso 1: Descarga directa
-        if "[download] Destination:" in line:
-            ruta_video = line.split("Destination:")[-1].strip()
-            if os.path.exists(ruta_video):
-                print(f"INFO: Archivo encontrado en 'Destination': '{ruta_video}'")
-                return ruta_video
-        # Caso 2: Fusión de formatos
-        if "[Merger] Merging formats into" in line:
-            try:
-                ruta_video = line.split('"')[1]
-                if os.path.exists(ruta_video):
-                    print(f"INFO: Archivo encontrado en 'Merger': '{ruta_video}'")
-                    return ruta_video
-            except IndexError:
-                continue # La línea no tiene el formato esperado
-        # Caso 3: El archivo ya ha sido descargado
-        if "has already been downloaded" in line:
-            try:
-                # La ruta está entre el prefijo '[download] ' y el sufijo ' has already been downloaded'
-                ruta_video = line.removeprefix('[download] ').removesuffix(' has already been downloaded').strip()
-                if os.path.exists(ruta_video):
-                    print(f"INFO: Archivo encontrado porque ya existía: '{ruta_video}'")
-                    return ruta_video
-            except Exception:
-                continue # La línea no tiene el formato esperado
-
-    print("ERROR: No se pudo determinar la ruta del archivo descargado. yt-dlp finalizó pero no se encontró el archivo.")
-    return None
+        if os.path.exists(ruta_salida_final):
+            print(f"SUCCESS: Video guardado en '{ruta_salida_final}' (a pesar de un error de yt-dlp, el archivo existe).")
+            return ruta_salida_final, None
+        
+        stderr_output = e.stderr.lower()
+        if "ffmpeg" in stderr_output or "ffprobe" in stderr_output:
+            error_msg = "Error con FFmpeg. Asegúrate de que esté instalado y en el PATH."
+        else:
+            error_msg = f"Falló la descarga con yt-dlp. Error:\n{e.stderr}"
+        
+        print(f"ERROR: {error_msg}")
+        return None, error_msg
+    except Exception as e:
+        error_msg = f"Ocurrió un error inesperado durante la descarga: {e}"
+        print(f"ERROR: {error_msg}")
+        return None, error_msg
 
 # --- FUNCIONES DE TRANSCRIPCIÓN ---
 
 def transcribir_y_diarizar(ruta_audio, diarizar=True, model_size="medium"):
-    """Transcribe un archivo de audio utilizando Whisper y opcionalmente realiza diarización."""
+    """Transcribe un archivo de audio, devuelve la ruta de la transcripción y el idioma detectado."""
     if diarizar and not HUGGING_FACE_TOKEN:
         print("ERROR: El token de Hugging Face no está configurado para la diarización.")
-        print("Por favor, añádelo a tu archivo config.py como HUGGING_FACE_TOKEN = 'tu_token_aqui'")
-        return None
+        return None, None
 
     token = HUGGING_FACE_TOKEN
 
@@ -158,12 +156,12 @@ def transcribir_y_diarizar(ruta_audio, diarizar=True, model_size="medium"):
     print(f"INFO: Usando dispositivo: {device}")
     
     try:
-        # La transcripción siempre se realiza
         print(f"STEP 1/2: Transcripción para: {ruta_audio}")
         transcription_result = modelo_whisper.transcribe(ruta_audio, word_timestamps=True)
+        detected_language = transcription_result.get('language', 'unknown')
+        print(f"INFO: Idioma detectado: {detected_language}")
 
         final_transcript_text = ""
-
         if diarizar:
             print("INFO: Cargando modelo de diarización...")
             diarization_pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=token)
@@ -177,7 +175,6 @@ def transcribir_y_diarizar(ruta_audio, diarizar=True, model_size="medium"):
                 final_transcript_text += f"[{segment['speaker']}] ({segment['start']:.2f}s - {segment['end']:.2f}s)\n"
                 final_transcript_text += f"{segment['text'].strip()}\n\n"
         else:
-            print("STEP 2/2: Diarización omitida. Formateando transcripción.")
             final_transcript_text = transcription_result["text"]
 
         os.makedirs(CARPETA_TRANSCRIPCIONES, exist_ok=True)
@@ -188,13 +185,13 @@ def transcribir_y_diarizar(ruta_audio, diarizar=True, model_size="medium"):
             f.write(final_transcript_text)
 
         print(f"SUCCESS: Transcripción guardada en: {ruta_salida_txt}")
-        return ruta_salida_txt
+        return ruta_salida_txt, detected_language
 
     except Exception as e:
         print(f"ERROR durante el proceso de IA: {e}")
         import traceback
         traceback.print_exc()
-        return None
+        return None, None
 
 def get_transcript_with_speakers(diarization, whisper_segments):
     def get_speaker_from_time(time, diarization_result):
@@ -234,43 +231,141 @@ def get_transcript_with_speakers(diarization, whisper_segments):
 
     return transcript
 
-# --- FUNCIONES DE SÍNTESIS DE VOZ ---
+# --- FUNCIONES DE TRADUCCIÓN Y SÍNTESIS ---
 
-def sintetizar_audio_gtts(ruta_transcripcion):
-    """
-    Lee un archivo de transcripción, extrae solo el texto hablado y lo sintetiza usando gTTS.
-    Devuelve la ruta del archivo de audio sintetizado.
-    """
-    if not os.path.exists(ruta_transcripcion):
-        print(f"ERROR: El archivo de transcripción '{ruta_transcripcion}' no fue encontrado.")
+def detectar_idioma(texto):
+    """Detecta el idioma de un texto dado."""
+    try:
+        # La función detect() devuelve un objeto Detected. Ej: Detected(lang=es, confidence=1)
+        detected_obj = GoogleTranslator(source='auto', target='en').detect(texto)
+        # El objeto tiene un atributo 'lang' con el código del idioma.
+        if detected_obj and hasattr(detected_obj, 'lang'):
+            idioma_detectado = detected_obj.lang
+            print(f"INFO: Idioma detectado: {idioma_detectado}")
+            return idioma_detectado
+        return None # No se detectó ningún idioma
+    except Exception as e:
+        print(f"ERROR al detectar el idioma: {e}")
         return None
 
-    print(f"INFO: Leyendo transcripción de '{ruta_transcripcion}' para sintetizar...")
-    texto_a_sintetizar = ""
+def traducir_texto(texto, idioma_origen='auto', idioma_destino='es'):
+    """
+    Traduce un texto de un idioma de origen a un idioma de destino.
+    """
     try:
-        with open(ruta_transcripcion, "r", encoding='utf-8') as f:
-            for line in f:
-                if not line.strip().startswith('[') and not line.strip().startswith('(') and line.strip():
-                    texto_a_sintetizar += line.strip() + " "
-        
-        texto_a_sintetizar = texto_a_sintetizar.strip()
-        if not texto_a_sintetizar:
-            print("WARNING: No se encontró texto para sintetizar en el archivo.")
-            return None
+        print(f"INFO: Traduciendo texto de '{idioma_origen}' a '{idioma_destino}'...")
+        traducido = GoogleTranslator(source=idioma_origen, target=idioma_destino).translate(texto)
+        print("SUCCESS: Texto traducido.")
+        return traducido
+    except Exception as e:
+        print(f"ERROR traduciendo texto: {e}")
+        return None
 
+def traducir_y_sintetizar_audio(ruta_audio):
+    """
+    Traduce y sintetiza audio. Si el audio ya está en español, solo lo sintetiza.
+    """
+    print(f"--- INICIANDO PROCESO DE TRADUCCIÓN/SÍNTESIS PARA: {ruta_audio} ---")
+    
+    # 1. Transcribir y detectar idioma
+    ruta_transcripcion, idioma_detectado = transcribir_y_diarizar(ruta_audio, diarizar=False)
+    if not ruta_transcripcion:
+        print("ERROR: No se pudo obtener la transcripción.")
+        return None, None
+
+    with open(ruta_transcripcion, 'r', encoding='utf-8') as f:
+        texto_original = f.read()
+
+    nombre_base = os.path.splitext(os.path.basename(ruta_audio))[0]
+    texto_final = ""
+    ruta_transcripcion_final = ""
+    sufijo_audio = ""
+
+    # 2. Decidir si traducir o solo sintetizar
+    if idioma_detectado == 'es':
+        print("INFO: El audio ya está en español. Omitiendo traducción.")
+        texto_final = texto_original
+        ruta_transcripcion_final = ruta_transcripcion # Reutilizamos la transcripción original
+        sufijo_audio = "_sintetizado_es"
+    else:
+        print(f"INFO: Traduciendo de '{idioma_detectado}' a español.")
+        texto_final = traducir_texto(texto_original, idioma_origen=idioma_detectado, idioma_destino='es')
+        if not texto_final:
+            return None, None
+        
+        ruta_transcripcion_final = os.path.join(CARPETA_TRANSCRIPCIONES, f"{nombre_base}_traduccion_es.txt")
+        with open(ruta_transcripcion_final, 'w', encoding='utf-8') as f:
+            f.write(texto_final)
+        print(f"INFO: Transcripción traducida guardada en: {ruta_transcripcion_final}")
+        sufijo_audio = "_traducido_es"
+
+    # 3. Sintetizar el texto final
+    ruta_audio_sintetizado = sintetizar_texto_a_audio(texto_final, nombre_base, sufijo=sufijo_audio)
+    if not ruta_audio_sintetizado:
+        return None, None
+
+    print(f"SUCCESS: Proceso de audio completado.")
+    return ruta_audio_sintetizado, ruta_transcripcion_final
+
+def sintetizar_texto_a_audio(texto, nombre_base, sufijo="_sintetizado", lang='es'):
+    """Función interna para sintetizar texto con gTTS y guardar el archivo."""
+    try:
         os.makedirs(CARPETA_AUDIO_SINTETIZADO, exist_ok=True)
-        nombre_base = os.path.splitext(os.path.basename(ruta_transcripcion))[0]
-        ruta_salida_mp3 = os.path.join(CARPETA_AUDIO_SINTETIZADO, f"{nombre_base}_sintetizado.mp3")
+        ruta_salida_mp3 = os.path.join(CARPETA_AUDIO_SINTETIZADO, f"{nombre_base}{sufijo}.mp3")
 
         print(f"INFO: Sintetizando texto con gTTS...")
-        tts = gTTS(text=texto_a_sintetizar, lang='es')
+        tts = gTTS(text=texto, lang=lang, slow=False)
         tts.save(ruta_salida_mp3)
         print(f"SUCCESS: Audio sintetizado guardado en '{ruta_salida_mp3}'")
         return ruta_salida_mp3
-
     except Exception as e:
         print(f"ERROR sintetizando audio con gTTS: {e}")
         return None
+
+
+def sintetizar_gtts(texto_o_ruta, es_ruta_archivo=True, lang='es'):
+    """
+    Sintetiza texto a audio usando gTTS.
+    Puede recibir una ruta a un archivo de transcripción o una cadena de texto directamente.
+    Permite especificar el idioma para la síntesis.
+    """
+    texto_a_sintetizar = ""
+    nombre_base = ""
+
+    if es_ruta_archivo:
+        ruta_transcripcion = texto_o_ruta
+        if not os.path.exists(ruta_transcripcion):
+            print(f"ERROR: El archivo de transcripción '{ruta_transcripcion}' no fue encontrado.")
+            return None
+        
+        print(f"INFO: Leyendo transcripción de '{ruta_transcripcion}' para sintetizar...")
+        try:
+            with open(ruta_transcripcion, "r", encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line: continue
+                    # Extraer solo el texto, ignorando timestamps y nombres de hablantes
+                    partes = line.split(')')
+                    texto = partes[-1].strip() if len(partes) > 1 else line
+                    if texto and not texto.startswith('['):
+                        texto_a_sintetizar += texto + " "
+            
+            nombre_base = os.path.splitext(os.path.basename(ruta_transcripcion))[0]
+        except Exception as e:
+            print(f"ERROR leyendo o procesando el archivo de transcripción: {e}")
+            return None
+    else:
+        texto_a_sintetizar = texto_o_ruta
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nombre_base = f"sintesis_manual_{timestamp}"
+
+    texto_a_sintetizar = texto_a_sintetizar.strip()
+    if not texto_a_sintetizar:
+        print("WARNING: No se encontró texto para sintetizar.")
+        return None
+
+    return sintetizar_texto_a_audio(texto_a_sintetizar, nombre_base, lang=lang)
+
 
 # --- LÓGICA PRINCIPAL ---
 
@@ -311,7 +406,7 @@ if __name__ == "__main__":
 
     elif args.sintetizar:
         print(f"--- SINTETIZANDO TRANSCRIPCIÓN: {args.sintetizar} ---")
-        sintetizar_audio_gtts(args.sintetizar)
+        sintetizar_gtts(args.sintetizar, es_ruta_archivo=True)
         sys.exit(0)
 
     if ruta_audio_final:

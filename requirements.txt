@@ -37,3 +37,7 @@ numpy==1.26.4
 gTTS
 gradio
 yt-dlp
+fastapi
+uvicorn[standard]
+pydantic
+deep-translator
